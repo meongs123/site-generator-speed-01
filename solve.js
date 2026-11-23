@@ -226,15 +226,20 @@ function endsPara(line) {
 const trimLine = (line) => line.replace(/^[ \t]+|[ \t]+$/g, '');
 
 /**
- * `src`'s block tokens, in order. Token shapes:
- * { k: 'para', s }, { k: 'head', d, s }, { k: 'code', lang, lines },
- * { k: 'hr' }, { k: 'quote', lines }, { k: 'list', ord, start, items }.
+ * `src` rendered in a single pass over its lines: its HTML (each block
+ * followed by "\n"), its table of contents (level 2 and 3 headings: level,
+ * id, html) and its excerpt (the first paragraph's inline HTML, or "").
+ * No token objects are built; blocks render straight into the output array.
  */
-function lexMd(src) {
+function renderMd(src, link) {
+  const ids = new Set();
+  const blocks = [];
+  const toc = [];
+  let excerpt = null;
   const lines = src.split('\n');
-  const tokens = [];
+  const n = lines.length;
   let i = 0;
-  while (i < lines.length) {
+  while (i < n) {
     const line = lines[i];
     if (MD_BLANK.test(line)) {
       i++;
@@ -242,37 +247,47 @@ function lexMd(src) {
     }
     const fence = MD_FENCE_OPEN.exec(line);
     if (fence !== null) {
-      const body = [];
+      const cls = fence[1] === '' ? '' : ` class="language-${esc(fence[1])}"`;
+      const cl = [];
       i++;
-      while (i < lines.length && !MD_FENCE_CLOSE.test(lines[i])) body.push(lines[i++]);
+      while (i < n && !MD_FENCE_CLOSE.test(lines[i])) cl.push(`${esc(lines[i++])}\n`);
       i++;
-      tokens.push({ k: 'code', lang: fence[1], lines: body });
+      blocks.push(`<pre><code${cls}>${cl.join('')}</code></pre>\n`);
       continue;
     }
     const heading = headingOf(line);
     if (heading !== null) {
-      tokens.push({ k: 'head', d: heading.depth, s: heading.text });
+      const id = uniqSlug(slugify(heading.text), ids);
+      const html = inlineMd(heading.text, link);
+      blocks.push(`<h${heading.depth} id="${id}">${html}</h${heading.depth}>\n`);
+      if (heading.depth === 2 || heading.depth === 3) toc.push({ level: heading.depth, id, html });
       i++;
       continue;
     }
     if (MD_HR.test(line)) {
-      tokens.push({ k: 'hr' });
+      blocks.push('<hr>\n');
       i++;
       continue;
     }
     if (MD_QUOTE.test(line)) {
       const body = [];
-      while (i < lines.length && MD_QUOTE.test(lines[i])) body.push(lines[i++].replace(/^> ?/, ''));
-      tokens.push({ k: 'quote', lines: body.map(trimLine).filter((l) => l !== '') });
+      while (i < n && MD_QUOTE.test(lines[i])) body.push(lines[i++].replace(/^> ?/, ''));
+      const q = body.map(trimLine).filter((l) => l !== '');
+      blocks.push(
+        q.length === 0
+          ? '<blockquote>\n</blockquote>\n'
+          : `<blockquote>\n<p>${inlineMd(q.join('\n'), link)}</p>\n</blockquote>\n`,
+      );
       continue;
     }
     const bullet = MD_BULLET.exec(line);
     const ordered = bullet === null ? MD_ORDERED.exec(line) : null;
     if (bullet !== null || ordered !== null) {
       const isOrd = ordered !== null;
+      const start = isOrd ? Number(ordered[1]) : 1;
       const marker = isOrd ? MD_ORDERED : MD_BULLET;
       const items = [];
-      while (i < lines.length) {
+      while (i < n) {
         const m = marker.exec(lines[i]);
         if (m !== null) {
           items.push([trimLine(isOrd ? m[2] : m[1])]);
@@ -284,20 +299,21 @@ function lexMd(src) {
           break;
         }
       }
-      tokens.push({
-        k: 'list',
-        ord: isOrd,
-        start: isOrd ? Number(ordered[1]) : 1,
-        items: items.map((parts) => parts.join('\n')),
-      });
+      const tag = isOrd ? 'ol' : 'ul';
+      const open = isOrd && start !== 1 ? `<ol start="${start}">` : `<${tag}>`;
+      let listHtml = `${open}\n`;
+      for (const parts of items) listHtml += `<li>${inlineMd(parts.join('\n'), link)}</li>\n`;
+      blocks.push(`${listHtml}</${tag}>\n`);
       continue;
     }
     const body = [trimLine(line)];
     i++;
-    while (i < lines.length && !endsPara(lines[i])) body.push(trimLine(lines[i++]));
-    tokens.push({ k: 'para', s: body.join('\n') });
+    while (i < n && !endsPara(lines[i])) body.push(trimLine(lines[i++]));
+    const html = inlineMd(body.join('\n'), link);
+    if (excerpt === null) excerpt = html;
+    blocks.push(`<p>${html}</p>\n`);
   }
-  return tokens;
+  return { html: blocks.join(''), toc, excerpt: excerpt ?? '' };
 }
 
 /** The characters a backslash escapes. */
@@ -416,46 +432,6 @@ function inlineMd(s, link) {
     i = j + 1;
   }
   return out.join('');
-}
-
-/**
- * `src` rendered: its HTML (each block followed by "\n"), its table of
- * contents (level 2 and 3 headings: level, id, html) and its excerpt (the
- * first paragraph's inline HTML, or "").
- */
-function renderMd(src, link) {
-  const ids = new Set();
-  const blocks = [];
-  const toc = [];
-  let excerpt = null;
-  for (const t of lexMd(src)) {
-    if (t.k === 'head') {
-      const id = uniqSlug(slugify(t.s), ids);
-      const html = inlineMd(t.s, link);
-      blocks.push(`<h${t.d} id="${id}">${html}</h${t.d}>`);
-      if (t.d === 2 || t.d === 3) toc.push({ level: t.d, id, html });
-    } else if (t.k === 'code') {
-      const cls = t.lang === '' ? '' : ` class="language-${esc(t.lang)}"`;
-      blocks.push(`<pre><code${cls}>${t.lines.map((l) => `${esc(l)}\n`).join('')}</code></pre>`);
-    } else if (t.k === 'hr') {
-      blocks.push('<hr>');
-    } else if (t.k === 'quote') {
-      blocks.push(
-        t.lines.length === 0
-          ? '<blockquote>\n</blockquote>'
-          : `<blockquote>\n<p>${inlineMd(t.lines.join('\n'), link)}</p>\n</blockquote>`,
-      );
-    } else if (t.k === 'list') {
-      const tag = t.ord ? 'ol' : 'ul';
-      const open = t.ord && t.start !== 1 ? `<ol start="${t.start}">` : `<${tag}>`;
-      blocks.push(`${open}\n${t.items.map((item) => `<li>${inlineMd(item, link)}</li>\n`).join('')}</${tag}>`);
-    } else {
-      const html = inlineMd(t.s, link);
-      if (excerpt === null) excerpt = html;
-      blocks.push(`<p>${html}</p>`);
-    }
-  }
-  return { html: blocks.map((b) => `${b}\n`).join(''), toc, excerpt: excerpt ?? '' };
 }
 
 // ---------------------------------------------------------------- Templates
