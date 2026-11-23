@@ -86,28 +86,27 @@ function longDate(date) {
   return `${Number(d)} ${MONTHS[Number(m) - 1]} ${y}`;
 }
 
-/** Whether code unit `c` is whitespace in the sense of /\s/ (no /u flag). */
-function isSpace(c) {
-  if (c < 128) return c === 32 || (c >= 9 && c <= 13);
-  return (
-    c === 0xa0 ||
-    c === 0x1680 ||
-    (c >= 0x2000 && c <= 0x200a) ||
-    c === 0x2028 ||
-    c === 0x2029 ||
-    c === 0x202f ||
-    c === 0x205f ||
-    c === 0x3000 ||
-    c === 0xfeff
-  );
-}
-
 /** The words of one line: its runs of characters other than whitespace. */
 function lineWords(line) {
   let n = 0;
   let inWord = false;
   for (let j = 0; j < line.length; j++) {
-    if (isSpace(line.charCodeAt(j))) inWord = false;
+    const c = line.charCodeAt(j);
+    // Whitespace in the sense of /\s/ (no /u flag), inlined: ASCII fast path,
+    // then the Unicode spaces.
+    const sp =
+      c === 32 ||
+      (c >= 9 && c <= 13) ||
+      c === 0xa0 ||
+      c === 0x1680 ||
+      (c >= 0x2000 && c <= 0x200a) ||
+      c === 0x2028 ||
+      c === 0x2029 ||
+      c === 0x202f ||
+      c === 0x205f ||
+      c === 0x3000 ||
+      c === 0xfeff;
+    if (sp) inWord = false;
     else if (!inWord) {
       inWord = true;
       n++;
