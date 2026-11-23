@@ -971,19 +971,10 @@ export function run(input) {
     tags: s.tagRefs.map((t) => ({ name: t.name, slug: t.slug, url: t.url })),
   });
   const pageOf = (s) => ({
-    title: s.data.title,
-    url: s.url,
-    date: s.data.date ?? '',
-    date_long: s.data.date === undefined ? '' : longDate(s.data.date),
-    summary: s.data.summary ?? '',
-    excerpt: s.excerpt,
-    reading_minutes: Math.max(1, Math.ceil(s.words / 200)),
-    tags: s.tagRefs.map((t) => ({ name: t.name, slug: t.slug, url: t.url })),
+    ...cardOf(s),
     slug: s.slug,
     content: s.html,
-    // toc entries already are {level, id, html}; the array is never mutated
-    // after render, so it is shared as-is.
-    toc: s.toc,
+    toc: s.toc.map((h) => ({ level: h.level, id: h.id, html: h.html })),
     newer: linkOf(s.newer),
     older: linkOf(s.older),
     is_post: s.post,
