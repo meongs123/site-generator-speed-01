@@ -76,10 +76,34 @@ function longDate(date) {
   return `${Number(d)} ${MONTHS[Number(m) - 1]} ${y}`;
 }
 
+/** Whether code unit `c` is whitespace in the sense of /\s/ (no /u flag). */
+function isSpace(c) {
+  if (c < 128) return c === 32 || (c >= 9 && c <= 13);
+  return (
+    c === 0xa0 ||
+    c === 0x1680 ||
+    (c >= 0x2000 && c <= 0x200a) ||
+    c === 0x2028 ||
+    c === 0x2029 ||
+    c === 0x202f ||
+    c === 0x205f ||
+    c === 0x3000 ||
+    c === 0xfeff
+  );
+}
+
 /** The words of a body: its runs of characters other than whitespace. */
 function countWords(text) {
-  const m = text.match(/\S+/g);
-  return m === null ? 0 : m.length;
+  let n = 0;
+  let inWord = false;
+  for (let i = 0; i < text.length; i++) {
+    if (isSpace(text.charCodeAt(i))) inWord = false;
+    else if (!inWord) {
+      inWord = true;
+      n++;
+    }
+  }
+  return n;
 }
 
 // ---------------------------------------------------------------- front matter
@@ -309,14 +333,17 @@ function trimLine(line) {
 /**
  * `src` rendered in a single pass over its lines: its HTML (each block
  * followed by "\n"), its table of contents (level 2 and 3 headings: level,
- * id, html) and its excerpt (the first paragraph's inline HTML, or "").
- * No token objects are built; blocks render straight into the output array.
+ * id, html), its excerpt (the first paragraph's inline HTML, or "") and its
+ * word count (runs of non-whitespace in the raw body — counted here, in the
+ * render pass, instead of a second scan later). No token objects are built;
+ * blocks render straight into the output array.
  */
 function renderMd(src, link) {
   const ids = new Set();
   const blocks = [];
   const toc = [];
   let excerpt = null;
+  const words = countWords(src);
   const lines = src.split('\n');
   const n = lines.length;
   let i = 0;
@@ -408,7 +435,7 @@ function renderMd(src, link) {
     if (excerpt === null) excerpt = html;
     blocks.push(`<p>${html}</p>\n`);
   }
-  return { html: blocks.join(''), toc, excerpt: excerpt ?? '' };
+  return { html: blocks.join(''), toc, excerpt: excerpt ?? '', words };
 }
 
 /** The characters a backslash escapes. */
@@ -848,6 +875,7 @@ export function run(input) {
     s.html = md.html;
     s.toc = md.toc;
     s.excerpt = md.excerpt;
+    s.words = md.words;
   }
 
   // 5. Collections: posts newest first, equal dates by slug.
@@ -896,7 +924,7 @@ export function run(input) {
     date_long: s.data.date === undefined ? '' : longDate(s.data.date),
     summary: s.data.summary ?? '',
     excerpt: s.excerpt,
-    reading_minutes: Math.max(1, Math.ceil(countWords(s.body) / 200)),
+    reading_minutes: Math.max(1, Math.ceil(s.words / 200)),
     tags: s.tagRefs.map((t) => ({ name: t.name, slug: t.slug, url: t.url })),
   });
   const pageOf = (s) => ({
