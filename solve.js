@@ -18,10 +18,23 @@ const hasOwn = (o, k) => Object.hasOwn(o, k);
 
 /** The HTML escape table: & < > " ' and nothing else. */
 const ESCAPES = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+const ESC_RE = /[&<>"']/g;
 
-/** `s` with the five HTML characters escaped. */
+/**
+ * `s` with the five HTML characters escaped. One regex scan, literal runs
+ * copied with slice — no per-match callback. (Never re-entered: esc calls
+ * nothing that calls esc, so the shared regex's lastIndex is safe.)
+ */
 function esc(s) {
-  return s.replace(/[&<>"']/g, (c) => ESCAPES[c]);
+  ESC_RE.lastIndex = 0;
+  let m;
+  let out = '';
+  let last = 0;
+  while ((m = ESC_RE.exec(s)) !== null) {
+    out += s.slice(last, m.index) + ESCAPES[m[0]];
+    last = m.index + 1;
+  }
+  return last === 0 ? s : out + s.slice(last);
 }
 
 /**
@@ -338,7 +351,8 @@ function inlineMd(s, link) {
     const c = s[i];
     if (c === '\\' && i + 1 < s.length && ESCAPABLE.has(s[i + 1])) {
       flush();
-      out.push(esc(s[i + 1]));
+      // Of the escapable characters only '>' is one of the five escaped.
+      out.push(s[i + 1] === '>' ? '&gt;' : s[i + 1]);
       i += 2;
       continue;
     }
