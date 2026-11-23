@@ -102,12 +102,12 @@ function isSpace(c) {
   );
 }
 
-/** The words of a body: its runs of characters other than whitespace. */
-function countWords(text) {
+/** The words of one line: its runs of characters other than whitespace. */
+function lineWords(line) {
   let n = 0;
   let inWord = false;
-  for (let i = 0; i < text.length; i++) {
-    if (isSpace(text.charCodeAt(i))) inWord = false;
+  for (let j = 0; j < line.length; j++) {
+    if (isSpace(line.charCodeAt(j))) inWord = false;
     else if (!inWord) {
       inWord = true;
       n++;
@@ -199,11 +199,11 @@ function fmValue(key, raw) {
 }
 
 /**
- * A source's front matter and body ({ data, body }), or { error } with the
- * first reason it is refused, checked line by line. `text` has "\n" ends.
+ * A source's front matter ({ data, bodyFrom }) — `bodyFrom` is the index of
+ * the first body line in `lines` — or { error } with the first reason it is
+ * refused, checked line by line. `lines` is the source split on "\n".
  */
-function parseFM(text) {
-  const lines = text.split('\n');
+function parseFM(lines) {
   if (lines[0] !== '---') return { error: 'no front matter' };
   let close = -1;
   for (let i = 1; i < lines.length; i++) {
@@ -229,7 +229,7 @@ function parseFM(text) {
     data[key] = v.value;
   }
   if (!hasOwn(data, 'title')) return { error: 'no title' };
-  return { data, body: lines.slice(close + 1).join('\n') };
+  return { data, bodyFrom: close + 1 };
 }
 
 // ---------------------------------------------------------------- Markdown
@@ -341,22 +341,22 @@ function trimLine(line) {
 }
 
 /**
- * `src` rendered in a single pass over its lines: its HTML (each block
- * followed by "\n"), its table of contents (level 2 and 3 headings: level,
- * id, html), its excerpt (the first paragraph's inline HTML, or "") and its
- * word count (runs of non-whitespace in the raw body — counted here, in the
- * render pass, instead of a second scan later). No token objects are built;
- * blocks render straight into the output array.
+ * The body lines `lines[from..]` rendered in a single pass: its HTML (each
+ * block followed by "\n"), its table of contents (level 2 and 3 headings:
+ * level, id, html), its excerpt (the first paragraph's inline HTML, or "")
+ * and its word count (runs of non-whitespace in the raw body lines — counted
+ * here, in the render pass, instead of a second scan later). No token
+ * objects are built; blocks render straight into the output array.
  */
-function renderMd(src, link) {
+function renderMd(lines, from, link) {
   const ids = new Set();
   const blocks = [];
   const toc = [];
   let excerpt = null;
-  const words = countWords(src);
-  const lines = src.split('\n');
+  let words = 0;
+  for (let li = from; li < lines.length; li++) words += lineWords(lines[li]);
   const n = lines.length;
-  let i = 0;
+  let i = from;
   while (i < n) {
     const line = lines[i];
     if (isBlank(line)) {
@@ -830,13 +830,15 @@ export function run(input) {
   // 2. Front matter, in source order; refused and draft sources drop out.
   const kept = [];
   for (const s of sources) {
-    const fm = parseFM(s.text);
+    const lines = s.text.split('\n');
+    const fm = parseFM(lines);
     if ('error' in fm) {
       report.push(`refused ${s.path}: ${fm.error}`);
       continue;
     }
     s.data = fm.data;
-    s.body = fm.body;
+    s.lines = lines;
+    s.bodyFrom = fm.bodyFrom;
     s.post = s.path.startsWith('posts/');
     s.newer = null;
     s.older = null;
@@ -912,7 +914,7 @@ export function run(input) {
       }
       return url;
     };
-    const md = renderMd(s.body, link);
+    const md = renderMd(s.lines, s.bodyFrom, link);
     s.html = md.html;
     s.toc = md.toc;
     s.excerpt = md.excerpt;
