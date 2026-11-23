@@ -333,83 +333,88 @@ function findSingleStar(s, from) {
   return -1;
 }
 
+/** First index from `from` where `s` holds one of \ ` * [ , or -1. */
+const INLINE_SPECIALS = ['\\', '`', '*', '['];
+function nextSpecial(s, from) {
+  let j = -1;
+  for (const sp of INLINE_SPECIALS) {
+    const k = s.indexOf(sp, from);
+    if (k !== -1 && (j === -1 || k < j)) j = k;
+  }
+  return j;
+}
+
 /**
- * `s` rendered inline; `link(target)` resolves a link's href. Plain text is
- * gathered into runs and escaped in one pass per run.
+ * `s` rendered inline; `link(target)` resolves a link's href. Literal runs
+ * between the special characters are copied whole and escaped in one pass.
  */
 function inlineMd(s, link) {
   const out = [];
-  let lit = '';
-  const flush = () => {
-    if (lit !== '') {
-      out.push(esc(lit));
-      lit = '';
-    }
-  };
   let i = 0;
-  while (i < s.length) {
-    const c = s[i];
-    if (c === '\\' && i + 1 < s.length && ESCAPABLE.has(s[i + 1])) {
-      flush();
+  while (true) {
+    const j = nextSpecial(s, i);
+    if (j === -1) {
+      if (i < s.length) out.push(esc(s.slice(i)));
+      break;
+    }
+    if (j > i) out.push(esc(s.slice(i, j)));
+    const c = s[j];
+    if (c === '\\' && j + 1 < s.length && ESCAPABLE.has(s[j + 1])) {
       // Of the escapable characters only '>' is one of the five escaped.
-      out.push(s[i + 1] === '>' ? '&gt;' : s[i + 1]);
-      i += 2;
+      out.push(s[j + 1] === '>' ? '&gt;' : s[j + 1]);
+      i = j + 2;
       continue;
     }
     if (c === '`') {
-      const j = s.indexOf('`', i + 1);
-      if (j > i + 1) {
-        flush();
-        out.push(`<code>${esc(s.slice(i + 1, j))}</code>`);
-        i = j + 1;
+      const k = s.indexOf('`', j + 1);
+      if (k > j + 1) {
+        out.push(`<code>${esc(s.slice(j + 1, k))}</code>`);
+        i = k + 1;
       } else {
-        lit += '`';
-        i++;
+        out.push('`');
+        i = j + 1;
       }
       continue;
     }
     if (c === '*') {
-      if (s[i + 1] === '*') {
-        const j = findUnescaped(s, '**', i + 2);
-        if (j > i + 2) {
-          flush();
-          out.push(`<strong>${inlineMd(s.slice(i + 2, j), link)}</strong>`);
-          i = j + 2;
+      if (s[j + 1] === '*') {
+        const k = findUnescaped(s, '**', j + 2);
+        if (k > j + 2) {
+          out.push(`<strong>${inlineMd(s.slice(j + 2, k), link)}</strong>`);
+          i = k + 2;
         } else {
-          lit += '**';
-          i += 2;
+          out.push('**');
+          i = j + 2;
         }
         continue;
       }
-      const j = findSingleStar(s, i + 1);
-      if (j > i + 1) {
-        flush();
-        out.push(`<em>${inlineMd(s.slice(i + 1, j), link)}</em>`);
-        i = j + 1;
+      const k = findSingleStar(s, j + 1);
+      if (k > j + 1) {
+        out.push(`<em>${inlineMd(s.slice(j + 1, k), link)}</em>`);
+        i = k + 1;
       } else {
-        lit += '*';
-        i++;
+        out.push('*');
+        i = j + 1;
       }
       continue;
     }
     if (c === '[') {
-      const k = findUnescaped(s, ']', i + 1);
+      const k = findUnescaped(s, ']', j + 1);
       const m = k !== -1 && s[k + 1] === '(' ? s.indexOf(')', k + 2) : -1;
       const target = m === -1 ? '' : s.slice(k + 2, m);
       if (target !== '' && !/\s/.test(target)) {
-        flush();
-        out.push(`<a href="${esc(link(target))}">${inlineMd(s.slice(i + 1, k), link)}</a>`);
+        out.push(`<a href="${esc(link(target))}">${inlineMd(s.slice(j + 1, k), link)}</a>`);
         i = m + 1;
         continue;
       }
-      lit += '[';
-      i++;
+      out.push('[');
+      i = j + 1;
       continue;
     }
-    lit += c;
-    i++;
+    // A backslash before a non-escapable character is itself literal.
+    out.push('\\');
+    i = j + 1;
   }
-  flush();
   return out.join('');
 }
 
