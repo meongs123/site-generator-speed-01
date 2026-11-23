@@ -322,7 +322,21 @@ function isContinued(line) {
   while (line.charCodeAt(j) === 32) j++;
   if (j < 2) return false;
   const c = line.charCodeAt(j);
-  return c !== 9 && c !== 11 && c !== 12 && c !== 13 && !Number.isNaN(c);
+  // Non-whitespace in the sense of /\S/ (no /u flag): the same whitespace
+  // set lineWords uses — ASCII 9-13 and the Unicode spaces, not just ASCII.
+  return !(
+    (c >= 9 && c <= 13) ||
+    c === 0xa0 ||
+    c === 0x1680 ||
+    (c >= 0x2000 && c <= 0x200a) ||
+    c === 0x2028 ||
+    c === 0x2029 ||
+    c === 0x202f ||
+    c === 0x205f ||
+    c === 0x3000 ||
+    c === 0xfeff ||
+    Number.isNaN(c)
+  );
 }
 
 /** Whether `line` ends a paragraph: blank, fence, heading or thematic break. */
