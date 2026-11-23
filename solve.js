@@ -722,11 +722,12 @@ function isTruthy(v) {
 }
 
 /**
- * `nodes` rendered in `scope` ({ vars, parent }). `tpls` maps names to parsed
- * trees; `depth` is the include depth (top-level render is 0).
+ * `nodes` rendered in `scope` ({ vars, parent }), appended to the shared
+ * output array `out`. `tpls` maps names to parsed trees; `depth` is the
+ * include depth (top-level render is 0). One array per top-level render —
+ * nested renders append to it instead of joining per call.
  */
-function renderTpl(nodes, scope, tpls, depth) {
-  const out = [];
+function renderTpl(nodes, scope, tpls, depth, out) {
   for (const n of nodes) {
     if (n.k === 'text') {
       out.push(n.s);
@@ -736,7 +737,7 @@ function renderTpl(nodes, scope, tpls, depth) {
       out.push(valText(lookup(scope, n.path)));
     } else if (n.k === 'if') {
       const branch = isTruthy(lookup(scope, n.path)) !== n.not ? n.then : n.els;
-      if (branch !== null) out.push(renderTpl(branch, scope, tpls, depth));
+      if (branch !== null) renderTpl(branch, scope, tpls, depth, out);
     } else if (n.k === 'for') {
       const xs = lookup(scope, n.path);
       if (Array.isArray(xs)) {
@@ -746,15 +747,14 @@ function renderTpl(nodes, scope, tpls, depth) {
           const vars = {};
           vars[n.name] = xs[k];
           vars.loop = { index: k + 1, first: k === 0, last: k === xs.length - 1, length: xs.length };
-          out.push(renderTpl(n.body, { vars, parent: scope }, tpls, depth));
+          renderTpl(n.body, { vars, parent: scope }, tpls, depth, out);
         }
       }
     } else if (n.k === 'inc') {
       const t = tpls.get(n.name);
-      if (t !== undefined && depth < INCLUDE_DEPTH) out.push(renderTpl(t, scope, tpls, depth + 1));
+      if (t !== undefined && depth < INCLUDE_DEPTH) renderTpl(t, scope, tpls, depth + 1, out);
     }
   }
-  return out.join('');
 }
 
 // ---------------------------------------------------------------- the build
@@ -989,7 +989,9 @@ export function run(input) {
   const render = (name, vars) => {
     const nodes = tpls.get(name);
     if (nodes === undefined) return null;
-    return renderTpl(nodes, { vars: { site, tags: allTags, recent, ...vars }, parent: null }, tpls, 0);
+    const out = [];
+    renderTpl(nodes, { vars: { site, tags: allTags, recent, ...vars }, parent: null }, tpls, 0, out);
+    return out.join('');
   };
   for (const s of kept) output[`${s.outDir}/index.html`] = render(s.layout, { page: pageOf(s) });
   const per = input.site.per_page;
