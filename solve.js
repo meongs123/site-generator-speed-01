@@ -41,22 +41,32 @@ function esc(s) {
  * The slug of `text`: NFKD, combining marks dropped, A-Z lowered, each run
  * of characters other than a-z and 0-9 one "-", none at either end, at most
  * 64 characters (a "-" left at the cut dropped), "untitled" when empty.
+ * For pure-ASCII input NFKD is the identity and there is no combining mark,
+ * so the normalize step is skipped — the result is exactly the same.
  */
 function slugify(text) {
-  const plain = text.normalize('NFKD').replace(/\p{M}/gu, '');
+  let ascii = true;
+  for (let i = 0; i < text.length; i++) {
+    if (text.charCodeAt(i) >= 128) {
+      ascii = false;
+      break;
+    }
+  }
+  const plain = ascii ? text : text.normalize('NFKD').replace(/\p{M}/gu, '');
   let out = '';
   let gap = false;
-  for (const ch of plain) {
-    let keep = null;
-    if (ch >= 'A' && ch <= 'Z') keep = ch.toLowerCase();
-    else if ((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9')) keep = ch;
-    if (keep === null) {
+  for (let i = 0; i < plain.length; i++) {
+    const c = plain.charCodeAt(i);
+    let keep = -1;
+    if (c >= 65 && c <= 90) keep = c + 32;
+    else if ((c >= 97 && c <= 122) || (c >= 48 && c <= 57)) keep = c;
+    if (keep === -1) {
       gap = out.length > 0;
       continue;
     }
     if (gap) out += '-';
     gap = false;
-    out += keep;
+    out += String.fromCharCode(keep);
   }
   out = out.slice(0, 64).replace(/-+$/, '');
   return out === '' ? 'untitled' : out;
