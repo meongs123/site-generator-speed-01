@@ -200,30 +200,111 @@ function parseFM(text) {
 
 // ---------------------------------------------------------------- Markdown
 
-const MD_BLANK = /^[ \t]*$/;
-const MD_FENCE_OPEN = /^```([A-Za-z0-9_+-]*)[ \t]*$/;
-const MD_FENCE_CLOSE = /^```[ \t]*$/;
-const MD_HEADING = /^(#{1,6})[ \t]+(.*?)[ \t]*$/;
-const MD_HR = /^(?:---|\*\*\*)[ \t]*$/;
-const MD_QUOTE = /^>/;
-const MD_BULLET = /^[-*] (.*)$/;
-const MD_ORDERED = /^(\d{1,9})\. (.*)$/;
-const MD_CONTINUED = /^ {2,}\S/;
+/** Whether `line` is empty or only spaces/tabs. */
+function isBlank(line) {
+  for (let j = 0; j < line.length; j++) {
+    const c = line.charCodeAt(j);
+    if (c !== 32 && c !== 9) return false;
+  }
+  return true;
+}
+
+/** Whether `c` may appear in a fence's language tag. */
+function isLangChar(c) {
+  return (
+    (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || (c >= 48 && c <= 57) || c === 95 || c === 43 || c === 45
+  );
+}
+
+/** A fence-opening line's language, or null (``` + [A-Za-z0-9_+-]* + spaces/tabs). */
+function fenceOpen(line) {
+  if (!line.startsWith('```')) return null;
+  let j = 3;
+  while (j < line.length && isLangChar(line.charCodeAt(j))) j++;
+  const lang = line.slice(3, j);
+  while (j < line.length) {
+    const c = line.charCodeAt(j);
+    if (c !== 32 && c !== 9) return null;
+    j++;
+  }
+  return lang;
+}
+
+/** Whether `line` closes a fence (``` + spaces/tabs only). */
+function fenceClose(line) {
+  if (!line.startsWith('```')) return false;
+  for (let j = 3; j < line.length; j++) {
+    const c = line.charCodeAt(j);
+    if (c !== 32 && c !== 9) return false;
+  }
+  return true;
+}
 
 /** A heading line's depth and text, or null (heading text is never empty). */
 function headingOf(line) {
-  const m = MD_HEADING.exec(line);
-  if (m === null || m[2] === '') return null;
-  return { depth: m[1].length, text: m[2] };
+  let d = 0;
+  while (d < 6 && line.charCodeAt(d) === 35) d++;
+  if (d === 0) return null;
+  const c = line.charCodeAt(d);
+  if (c !== 32 && c !== 9) return null;
+  let s = d;
+  while (s < line.length && (line.charCodeAt(s) === 32 || line.charCodeAt(s) === 9)) s++;
+  let e = line.length;
+  while (e > s && (line.charCodeAt(e - 1) === 32 || line.charCodeAt(e - 1) === 9)) e--;
+  if (e === s) return null;
+  return { depth: d, text: line.slice(s, e) };
+}
+
+/** Whether `line` is a thematic break (--- or *** + spaces/tabs only). */
+function isHr(line) {
+  if (line.length < 3) return false;
+  const c = line.charCodeAt(0);
+  if (c !== 45 && c !== 42) return false;
+  if (!line.startsWith(c === 45 ? '---' : '***')) return false;
+  for (let j = 3; j < line.length; j++) {
+    const cc = line.charCodeAt(j);
+    if (cc !== 32 && cc !== 9) return false;
+  }
+  return true;
+}
+
+/** A bullet line's item text, or null (- or * + exactly one space). */
+function bulletOf(line) {
+  const c = line.charCodeAt(0);
+  if ((c === 45 || c === 42) && line.charCodeAt(1) === 32) return line.slice(2);
+  return null;
+}
+
+/** An ordered-list line's number and item text, or null (1-9 digits + ". "). */
+function orderedOf(line) {
+  let j = 0;
+  while (j < 9 && line.charCodeAt(j) >= 48 && line.charCodeAt(j) <= 57) j++;
+  if (j === 0 || line.charCodeAt(j) !== 46 || line.charCodeAt(j + 1) !== 32) return null;
+  return { num: line.slice(0, j), text: line.slice(j + 2) };
+}
+
+/** Whether `line` continues a list item (>= 2 spaces, then a non-whitespace char). */
+function isContinued(line) {
+  let j = 0;
+  while (line.charCodeAt(j) === 32) j++;
+  if (j < 2) return false;
+  const c = line.charCodeAt(j);
+  return c !== 9 && c !== 11 && c !== 12 && c !== 13 && !Number.isNaN(c);
 }
 
 /** Whether `line` ends a paragraph: blank, fence, heading or thematic break. */
 function endsPara(line) {
-  return MD_BLANK.test(line) || MD_FENCE_OPEN.test(line) || headingOf(line) !== null || MD_HR.test(line);
+  return isBlank(line) || fenceOpen(line) !== null || headingOf(line) !== null || isHr(line);
 }
 
 /** A line as rendered: spaces and tabs at either end dropped. */
-const trimLine = (line) => line.replace(/^[ \t]+|[ \t]+$/g, '');
+function trimLine(line) {
+  let a = 0;
+  let b = line.length;
+  while (a < b && (line.charCodeAt(a) === 32 || line.charCodeAt(a) === 9)) a++;
+  while (b > a && (line.charCodeAt(b - 1) === 32 || line.charCodeAt(b - 1) === 9)) b--;
+  return a === 0 && b === line.length ? line : line.slice(a, b);
+}
 
 /**
  * `src` rendered in a single pass over its lines: its HTML (each block
@@ -241,16 +322,16 @@ function renderMd(src, link) {
   let i = 0;
   while (i < n) {
     const line = lines[i];
-    if (MD_BLANK.test(line)) {
+    if (isBlank(line)) {
       i++;
       continue;
     }
-    const fence = MD_FENCE_OPEN.exec(line);
-    if (fence !== null) {
-      const cls = fence[1] === '' ? '' : ` class="language-${esc(fence[1])}"`;
+    const fenceLang = fenceOpen(line);
+    if (fenceLang !== null) {
+      const cls = fenceLang === '' ? '' : ` class="language-${esc(fenceLang)}"`;
       const cl = [];
       i++;
-      while (i < n && !MD_FENCE_CLOSE.test(lines[i])) cl.push(`${esc(lines[i++])}\n`);
+      while (i < n && !fenceClose(lines[i])) cl.push(`${esc(lines[i++])}\n`);
       i++;
       blocks.push(`<pre><code${cls}>${cl.join('')}</code></pre>\n`);
       continue;
@@ -264,14 +345,17 @@ function renderMd(src, link) {
       i++;
       continue;
     }
-    if (MD_HR.test(line)) {
+    if (isHr(line)) {
       blocks.push('<hr>\n');
       i++;
       continue;
     }
-    if (MD_QUOTE.test(line)) {
+    if (line.charCodeAt(0) === 62) {
       const body = [];
-      while (i < n && MD_QUOTE.test(lines[i])) body.push(lines[i++].replace(/^> ?/, ''));
+      while (i < n && lines[i].charCodeAt(0) === 62) {
+        body.push(lines[i].charCodeAt(1) === 32 ? lines[i].slice(2) : lines[i].slice(1));
+        i++;
+      }
       const q = body.map(trimLine).filter((l) => l !== '');
       blocks.push(
         q.length === 0
@@ -280,20 +364,31 @@ function renderMd(src, link) {
       );
       continue;
     }
-    const bullet = MD_BULLET.exec(line);
-    const ordered = bullet === null ? MD_ORDERED.exec(line) : null;
+    const bullet = bulletOf(line);
+    const ordered = bullet === null ? orderedOf(line) : null;
     if (bullet !== null || ordered !== null) {
       const isOrd = ordered !== null;
-      const start = isOrd ? Number(ordered[1]) : 1;
-      const marker = isOrd ? MD_ORDERED : MD_BULLET;
+      const start = isOrd ? Number(ordered.num) : 1;
       const items = [];
       while (i < n) {
-        const m = marker.exec(lines[i]);
-        if (m !== null) {
-          items.push([trimLine(isOrd ? m[2] : m[1])]);
-          i++;
-        } else if (MD_CONTINUED.test(lines[i])) {
-          items[items.length - 1].push(trimLine(lines[i]));
+        const cur = lines[i];
+        if (isOrd) {
+          const m = orderedOf(cur);
+          if (m !== null) {
+            items.push([trimLine(m.text)]);
+            i++;
+            continue;
+          }
+        } else {
+          const m = bulletOf(cur);
+          if (m !== null) {
+            items.push([trimLine(m)]);
+            i++;
+            continue;
+          }
+        }
+        if (isContinued(cur)) {
+          items[items.length - 1].push(trimLine(cur));
           i++;
         } else {
           break;
