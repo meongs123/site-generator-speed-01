@@ -764,7 +764,21 @@ const RESERVED_DIRS = ['posts', 'tags', 'page'];
 
 const dirOf = (path) => (path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '');
 
-/** `rel` resolved from directory `dir`, or null when it climbs above the root. */
+/** Whether `target` opens with a scheme ([A-Za-z][A-Za-z0-9+.-]*:). */
+function hasScheme(target) {
+  const c0 = target.charCodeAt(0);
+  if (!((c0 >= 65 && c0 <= 90) || (c0 >= 97 && c0 <= 122))) return false;
+  for (let j = 1; j < target.length; j++) {
+    const c = target.charCodeAt(j);
+    if (c === 58) return true;
+    if (
+      !((c >= 65 && c <= 90) || (c >= 97 && c <= 122) || (c >= 48 && c <= 57) || c === 43 || c === 45 || c === 46)
+    ) {
+      return false;
+    }
+  }
+  return false;
+}
 function resolveRel(dir, rel) {
   const parts = dir === '' ? [] : dir.split('/');
   for (const seg of rel.split('/')) {
@@ -866,20 +880,37 @@ export function run(input) {
   // 4. Markdown, links resolved to built pages and static files.
   const staticPaths = new Set(statics.map((f) => f.path));
   const broken = new Set();
+  // Resolved link targets, per source directory: target -> URL, or null
+  // when broken. The broken-link report is still recorded per (source,
+  // target) — the cache only skips re-resolving, never re-reporting.
+  const linkCache = new Map();
   for (const s of kept) {
     const dir = dirOf(s.path);
+    let byDir = linkCache.get(dir);
+    if (byDir === undefined) {
+      byDir = new Map();
+      linkCache.set(dir, byDir);
+    }
     const link = (target) => {
-      if (/^[A-Za-z][A-Za-z0-9+.-]*:/.test(target) || target.startsWith('/') || target.startsWith('#')) {
+      if (hasScheme(target) || target.startsWith('/') || target.startsWith('#')) {
         return target;
       }
-      const hash = target.indexOf('#');
-      const rel = hash === -1 ? target : target.slice(0, hash);
-      const frag = hash === -1 ? '' : target.slice(hash);
-      const path = rel === '' ? null : resolveRel(dir, rel);
-      if (path !== null && bySource.has(path)) return `${bySource.get(path).url}${frag}`;
-      if (path !== null && staticPaths.has(path)) return `${base}/${path}${frag}`;
-      broken.add(`broken-link ${s.path} -> ${target}`);
-      return target;
+      let url = byDir.get(target);
+      if (url === undefined) {
+        const hash = target.indexOf('#');
+        const rel = hash === -1 ? target : target.slice(0, hash);
+        const frag = hash === -1 ? '' : target.slice(hash);
+        const path = rel === '' ? null : resolveRel(dir, rel);
+        if (path !== null && bySource.has(path)) url = `${bySource.get(path).url}${frag}`;
+        else if (path !== null && staticPaths.has(path)) url = `${base}/${path}${frag}`;
+        else url = null;
+        byDir.set(target, url);
+      }
+      if (url === null) {
+        broken.add(`broken-link ${s.path} -> ${target}`);
+        return target;
+      }
+      return url;
     };
     const md = renderMd(s.body, link);
     s.html = md.html;
